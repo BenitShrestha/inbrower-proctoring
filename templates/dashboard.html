@@ -263,7 +263,7 @@
             let endTime = null;
 
             // Handle fullscreen and visibility changes
-        document.addEventListener('fullscreenchange', () => {
+            document.addEventListener('fullscreenchange', () => {
             fullscreenActive = document.fullscreenElement !== null;
             if (fullscreenActive) {
                 startTime = Date.now();
