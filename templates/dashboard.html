@@ -48,7 +48,6 @@
             height: 100%;
             background: rgba(0, 0, 0, 0.5); /* Semi-transparent overlay */
             z-index: 1000; /* Ensure it appears above other elements */
-            display: none; /* Initially hidden */
         }
 
         /* Style for the warning screen */
@@ -62,7 +61,7 @@
             display: none; /* Initially hidden */
             justify-content: center;
             align-items: center;
-            z-index: 1001; /* Ensure it appears above overlay */
+            z-index: 1000; /* Ensure it appears above other elements */
         }
 
         .warning-sign {
@@ -127,7 +126,7 @@
             border-radius: 5px;
             font-size: 14px;
         }
-        
+
         .rules-box {
             border: 2px solid #009688; /* Border color and thickness */
             border-radius: 8px; /* Rounded corners */
@@ -150,7 +149,6 @@
             text-align: center; /* Center align the heading */
             margin: 10px 0; /* Reduced spacing above and below the heading */
         }
-        
     </style>
 </head>
 <body>
@@ -179,10 +177,10 @@
     </div>
 
     <!-- Rules Screen -->
-    <div id="rulesScreen" class="warning-screen">
+    <div id="rulesScreen" class="warning-screen" style="display: flex;">
         <div class="rules-box">
             <div class="rules-content">
-                <h2 class="rules-heading">Rules and Regulations</h2> <!-- Added class for styling -->
+                <h2 class="rules-heading">Rules and Regulations</h2>
                 <p>1. No cheating allowed.</p>
                 <p>2. Follow all instructions carefully.</p>
                 <p>3. Keep your camera on at all times.</p>
@@ -191,9 +189,9 @@
             </div>
         </div>
     </div>
- 
+
     <!-- Overlay to block interactions -->
-    <div id="overlay" class="overlay"></div>
+    <div id="overlay" class="overlay" style="display: none;"></div>
 
     <!-- Warning Screen -->
     <div id="warningScreen" class="warning-screen">
@@ -204,11 +202,14 @@
     <script>
         document.addEventListener('DOMContentLoaded', (event) => {
             let isFullscreen = false;
-            let isVideoActive = false; // Uncomment if you want to use this later
+            let isVideoActive = false;
 
-            // Show rules screen first
-            document.getElementById('rulesScreen').style.display = 'flex';
-            document.getElementById('overlay').style.display = 'block'; // Block interaction
+            // Hide the video feed button initially
+            const toggleButton = document.getElementById('toggleButton');
+            toggleButton.style.display = 'none';
+
+            // Remove overlay for initial rules interaction
+            document.getElementById('overlay').style.display = 'none';
 
             document.getElementById('startButton').addEventListener('click', () => {
                 // Hide rules screen
@@ -231,12 +232,17 @@
                 } else if (document.documentElement.msRequestFullscreen) { // IE/Edge
                     document.documentElement.msRequestFullscreen();
                 }
+
                 // Remove the fullscreen button after fullscreen is requested
                 fullscreenButton.style.display = 'none';
                 // Remove the background blur and overlay after entering fullscreen
                 document.getElementById('content').classList.remove('blur');
                 document.getElementById('overlay').style.display = 'none';
                 isFullscreen = true;
+
+                // Show the video feed button only after entering fullscreen
+                toggleButton.style.display = 'block'; // Show video feed button after entering fullscreen
+
                 checkConditions();
             }
 
@@ -248,6 +254,7 @@
                 document.getElementById('content').classList.add('blur');
                 document.getElementById('overlay').style.display = 'block';
                 isFullscreen = false;
+                toggleButton.style.display = 'none'; // Hide video feed button when exiting fullscreen
                 checkConditions();
             }
 
@@ -303,10 +310,8 @@
             // Apply blur to the background
             document.getElementById('content').classList.add('blur'); // Blurs the content
 
-            const toggleButton = document.getElementById('toggleButton');
             const videoFeed = document.getElementById('videoFeed');
             const timeRemainingDisplay = document.getElementById('timeRemaining');
-            let isActive = false;
 
             function checkVideoFeedStatus() {
                 fetch('/video_feed_status')
@@ -321,7 +326,6 @@
                     });
             }
 
-            
             function stopVideoFeed() {
                 isVideoActive = false;
                 toggleButton.textContent = 'Start Video Feed';
