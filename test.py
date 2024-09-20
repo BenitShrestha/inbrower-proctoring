@@ -355,6 +355,10 @@ def generate_cheating_graph(username):
 async def index_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/index", response_class=HTMLResponse)
+async def index_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
 # Route to render aboutUs.html
 @app.get("/aboutUs", response_class=HTMLResponse)
 async def get_about_us(request: Request):
