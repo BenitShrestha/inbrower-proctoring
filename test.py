@@ -21,7 +21,8 @@ from datetime import datetime
 import json
 from ultralytics import YOLO 
 from PIL import Image
-
+import asyncio
+import time
 
 app = FastAPI()
 
@@ -458,7 +459,7 @@ async def handle_alt_tab(request: Request):
     print(f"End Time: {end_time}")
     print(f"Time Elapsed: {time_elapsed}")
 
-    return {"message": "Data received"}
+    return {"message": "Data received"}  
 
 @app.post("/toggle_video_feed")
 async def toggle_video_feed():
