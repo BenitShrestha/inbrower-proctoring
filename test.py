@@ -1,7 +1,7 @@
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
-from fastapi import FastAPI, Form, Request, WebSocket, HTTPException
+from fastapi import FastAPI, Form, Request, WebSocket, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,27 +21,166 @@ from datetime import datetime
 import json
 from ultralytics import YOLO 
 from PIL import Image
-import asyncio
-import time
+
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from typing import Annotated
+from fastapi.staticfiles import StaticFiles
+
+import models
+from models import User  # Import the User class, not the table name
+
+from database import engine, SessionLocal
 
 app = FastAPI()
 
+# Create tables in the database
+models.Base.metadata.create_all(bind=engine)
+
 # For templates (HTML rendering)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+# templates = Jinja2Templates(directory="templates")
+
+# # Fake in-memory user storage
+# fake_user_db = {
+#     "user1": {"username": "user1", "password": "password1"},
+#     "user2": {"username": "user2", "password": "password2"},
+#     "user3": {"username": "user3", "password": "password3"},
+#     "user4": {"username": "user4", "password": "password4"},
+#     "user5": {"username": "user5", "password": "password5"},
+#     "admin": {"username": "admin", "password": "adminpass"}
+# }
+# current_user = None
+
+# user_cheating_data = {user: [] for user in fake_user_db if user != "admin"}
+
+# Pydantic models
+class MarksheetBase(BaseModel):
+    username: str
+    password: str
+    marks: int
+    strikes: int
+
+class UserBase(BaseModel):
+    username: str
+    password: str
+
+# Dependency for database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+db_dependency = Annotated[Session, Depends(get_db)]
+
+# Route to create a user with error handling
+@app.post("/users/", status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserBase, db: db_dependency):
+    existing_user = db.query(models.User).filter(
+        (models.User.username == user.username) | (models.User.password == user.password)
+    ).first()
+
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User with this username or password already exists")
+
+    # Create a new user entry in the database
+    new_user = models.User(username=user.username, password=user.password)
+    db.add(new_user)
+    db.commit()
+    return new_user
+
+@app.post("/add_student")
+async def add_student(request:Request,username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    # Check if the user already exists
+    existing_user = db.query(User).filter(User.username == username).first()  # Use 'User' class here
+    if existing_user:
+        return {"error": "User already exists"}
+    
+    # Add the new user
+    new_user = User(username=username, password=password)  # Use 'User' class here
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return templates.TemplateResponse("studentsList.html", {"request": request})
+
+
+# Route to fetch user information based on username and password
+@app.get("/users/{username}", status_code=status.HTTP_200_OK)
+async def read_user(username: str, password: str, db: db_dependency):
+    user = db.query(models.User).filter(
+        models.User.username == username,
+        models.User.password == password
+    ).first()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+# Set up templates directory
 templates = Jinja2Templates(directory="templates")
 
-# Fake in-memory user storage
-fake_user_db = {
-    "user1": {"username": "user1", "password": "password1"},
-    "user2": {"username": "user2", "password": "password2"},
-    "user3": {"username": "user3", "password": "password3"},
-    "user4": {"username": "user4", "password": "password4"},
-    "user5": {"username": "user5", "password": "password5"},
-    "admin": {"username": "admin", "password": "adminpass"}
-}
+# Global variable to store the current user
 current_user = None
 
-user_cheating_data = {user: [] for user in fake_user_db if user != "admin"}
+# Login route (POST)
+@app.post("/login")
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    global current_user
+    user = db.query(models.User).filter(
+        models.User.username == username,
+        models.User.password == password
+    ).first()
+    
+    if user:
+        current_user = username  # Store the user's username in the global variable
+        if username == "admin" and password == "admin":
+            return RedirectResponse(url="/teachersMain", status_code=302)  # Redirect to admin page
+        return RedirectResponse(url="/dashboard", status_code=302)
+    
+    return templates.TemplateResponse("login.html", {"request": Request, "msg": "Invalid credentials"})
+
+# Dashboard route (GET)
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    if current_user:
+        return templates.TemplateResponse("dashboard.html", {"request": request, "user": current_user})
+    return RedirectResponse(url="/")
+
+# Admin route (GET)
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(request: Request):
+    if current_user == "admin":
+        db: Session = SessionLocal()
+        try:
+            users = db.query(models.User.username).filter(models.User.username != "admin").distinct().all()
+            users = [user.username for user in users]
+        finally:
+            db.close()
+        return templates.TemplateResponse("admin.html", {"request": request, "users": users})
+    return RedirectResponse(url="/")
+
+# Serve static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Extracting data from database
+def initialize_user_cheating_data():
+    db: Session = SessionLocal()
+    try:
+        users = db.query(models.User.username).filter(models.User.username != "admin").distinct().all()
+        user_cheating_data = {user.username: [] for user in users}
+    finally:
+        db.close()
+    return user_cheating_data
+
+# Initialize user_cheating_data
+user_cheating_data = initialize_user_cheating_data()
 
 # Face tracking setup
 mp_face_mesh = mp.solutions.face_mesh
@@ -55,11 +194,15 @@ R_H_RIGHT = [263]
 
 eye_cheating = False
 head_cheating = False
-sound_detected = False
+# sound_detected = False
 video_feed_active = False
 video_cap = None
+sound_detected = False
+audio_detection_active = False
+stream = None  # Initialize stream variable
+# time_remaining = 0
 
-total_time = 30  # 5 minutes in seconds
+total_time = 60
 start_time = None
 cheating_data = []
 
@@ -110,13 +253,13 @@ def iris_position(iris_center, right_point, left_point):
         return "LEFT", gaze_ratio
     
 def detect_sound():
-    global sound_detected
+    global sound_detected, stream
     # PyAudio setup for sound detection
     FORMAT = pyaudio.paInt16  # Audio format (16-bit resolution)
     CHANNELS = 1              # Mono channel
     RATE = 44100              # Sampling rate (44.1kHz)
     CHUNK = 1024              # Number of samples per chunk
-    THRESHOLD = 500           # Adjust this value based on your environment
+    THRESHOLD = 1000           # Adjust this value based on your environment
 
     # Initialize PyAudio object
     p = pyaudio.PyAudio()
@@ -156,11 +299,6 @@ def detect_sound():
     # Terminate PyAudio object
     p.terminate()
 
-# Start the audio detection in a background thread
-# audio_thread = threading.Thread(target=detect_sound)
-# audio_thread.daemon = True  # Ensure it closes with the main program
-# audio_thread.start()
-
 def start_audio_detection():
     global audio_detection_active
     audio_detection_active = True
@@ -169,9 +307,12 @@ def start_audio_detection():
     audio_thread.start()
 
 def stop_audio_detection():
-    global audio_detection_active
+    global audio_detection_active, stream
     audio_detection_active = False
     print("Audio detection stopped.")
+    if stream is not None:
+        stream.stop_stream()
+        stream.close()
 
 anti_spoofing_model = YOLO('best.pt')
 
@@ -186,11 +327,11 @@ def predict_anti_spoofing(image):
     return "Unknown", 0.0
 
 def generate_video_feed(username):
-    global eye_cheating, head_cheating, video_feed_active, multiple_persons_detected, book_detected, phone_detected, start_time
-    cap = cv.VideoCapture(0)
+    global eye_cheating, head_cheating, video_feed_active, multiple_persons_detected, book_detected, phone_detected, start_time, video_cap
+    video_cap = cv.VideoCapture(0)
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
         while video_feed_active:
-            ret, frame = cap.read()
+            ret, frame = video_cap.read()
             if not ret:
                 break
             frame = cv.flip(frame, 1)
@@ -290,7 +431,6 @@ def generate_video_feed(username):
 
                 elapsed_time = time.time() - start_time
                 user_cheating_data[username].append((elapsed_time, is_cheating))
-                # cheating_data.append((elapsed_time, is_cheating))
 
                 color = (0, 0, 255) if is_cheating else (0, 255, 0)
                 text = "CHEATING DETECTED" if is_cheating else "NO CHEATING DETECTED"
@@ -318,7 +458,7 @@ def generate_video_feed(username):
             phone_detected = False
 
 
-    cap.release()
+    video_cap.release()
 
 
 def generate_cheating_graph(username):
@@ -343,14 +483,6 @@ def generate_cheating_graph(username):
     
     return image_base64
 
-# @app.post("/alt-tab")
-# async def alt_tab_alert(request: Request):
-#     data = await request.json()
-#     if data.get("alt_tab") == "true":
-#         async with httpx.AsyncClient() as client:
-#             response = await client.post("http://localhost:8000/alt-tab", json={"alt_tab": "true"})
-#             return {"message": "Alt+Tab detected and reported"}
-#     return {"message": "No Alt+Tab detected"}
 
 @app.get("/", response_class=HTMLResponse)
 async def index_page(request: Request):
@@ -370,29 +502,29 @@ async def get_about_us(request: Request):
 async def get_how_it_works(request: Request):
     return templates.TemplateResponse("howItWorks.html", {"request": request})
 
-# @app.get("/login", response_class=HTMLResponse)
-# async def login_page(request: Request):
-#     return templates.TemplateResponse("login.html", {"request": request})
-
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
-@app.post("/login")
-async def login(username: str = Form(...), password: str = Form(...)):
-    if username in fake_user_db and password == fake_user_db[username]["password"]:
-        global current_user
-        current_user = username
-        if username == "admin":
-            return RedirectResponse(url="/admin", status_code=302)
-        return RedirectResponse(url="/dashboard", status_code=302)
-    return {"message": "Invalid credentials"}
+@app.get("/teachersMain", response_class=HTMLResponse)
+async def teachers_main_page(request: Request):
+    return templates.TemplateResponse("teachersMain.html", {"request": request})
+
+@app.get("/scheduleExam", response_class=HTMLResponse)
+async def schedule_exam_page(request: Request):
+    return templates.TemplateResponse("scheduleExam.html", {"request": request})
+
+@app.get("/studentsList", response_class=HTMLResponse)
+async def student_list_page(request: Request):
+    return templates.TemplateResponse("studentsList.html", {"request": request})
 
 # @app.post("/login")
 # async def login(username: str = Form(...), password: str = Form(...)):
-#     if username == fake_user_db["user"]["username"] and password == fake_user_db["user"]["password"]:
+#     if username in fake_user_db and password == fake_user_db[username]["password"]:
 #         global current_user
 #         current_user = username
+#         if username == "admin":
+#             return RedirectResponse(url="/teachersMain", status_code=302)
 #         return RedirectResponse(url="/dashboard", status_code=302)
 #     return {"message": "Invalid credentials"}
 
@@ -402,26 +534,13 @@ async def dashboard(request: Request):
         return templates.TemplateResponse("dashboard.html", {"request": request, "user": current_user})
     return RedirectResponse(url="/")
 
-# @app.get("/admin", response_class=HTMLResponse)
-# async def admin_dashboard(request: Request):
-#     if current_user == "admin":
-#         graph = generate_cheating_graph()
-#         return templates.TemplateResponse("admin.html", {"request": request, "user": current_user, "graph": graph})
-#     return RedirectResponse(url="/")
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request):
-    if current_user == "admin":
-        users = [u for u in fake_user_db if u != "admin"]
-        return templates.TemplateResponse("admin.html", {"request": request, "users": users})
-    return RedirectResponse(url="/")
-
 @app.get("/admin/user/{username}")
 async def admin_user_dashboard(username: str):
     if current_user == "admin":
-        graph = generate_cheating_graph(username)
-        if graph:
-            return HTMLResponse(f'<img src="data:image/png;base64,{graph}" alt="Cheating Graph for {username}">')
+        # graph = generate_cheating_graph(username)
+        graphs = generate_cheating_graph(username)
+        if graphs:
+            return HTMLResponse(f'<img src="data:image/png;base64,{graphs}" alt="Cheating Graph for {username}">')
         return HTMLResponse('<p>No data available for this user.</p>')
     # raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -431,14 +550,24 @@ async def video_feed(username: str):
         return StreamingResponse(generate_video_feed(username), media_type="multipart/x-mixed-replace; boundary=frame")
     return RedirectResponse(url="/")
 
-# Add a new endpoint to check the video feed status
 @app.get("/video_feed_status")
 async def video_feed_status():
-    global video_feed_active, start_time
+    global video_feed_active, start_time, total_time
+    
     if video_feed_active and start_time:
         elapsed_time = time.time() - start_time
         time_remaining = max(0, total_time - elapsed_time)
+
+        # If time_remaining is 0, deactivate the video feed
+        if time_remaining <= 0:
+            video_feed_active = False
+            stop_audio_detection()  # Stop audio detection
+            if video_cap is not None:
+                video_cap.release()  # Release the camera
+                video_cap = None  # Reset the capture object
+        
         return {"active": video_feed_active, "time_remaining": int(time_remaining)}
+    
     return {"active": video_feed_active, "time_remaining": total_time}
 
 @app.post("/alt-tab")
@@ -473,7 +602,6 @@ async def toggle_video_feed():
         stop_audio_detection()  # Stop audio detection when video feed stops
         if video_cap is not None:
             video_cap.release()  # Release the camera
-            video_cap = None  # Reset the capture object
     return {"status": "active" if video_feed_active else "inactive"}
 
 if __name__ == "__main__":
